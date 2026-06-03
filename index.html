@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Video Presentation with Laser Pointer</title>
+    <style>
+        /* 画面全体の設定 */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            overflow: hidden;
+            font-family: sans-serif;
+            /* 疑似レーザーポインターを表示するため、通常のマウスカーソルは非表示 */
+            cursor: none; 
+        }
+
+        /* 動画を画面いっぱいに配置するコンテナ */
+        .video-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* 【リサイズ対応】動画の縦横比を維持して画面いっぱいに表示 */
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain; /* 画面に収まるよう自動縮小・黒帯補正 */
+        }
+
+        /* 疑似レーザーポインターのスタイル */
+        .laser-pointer {
+            position: fixed;
+            width: 12px;
+            height: 12px;
+            background-color: rgba(255, 0, 0, 0.9); /* 赤色 */
+            border-radius: 50%;
+            pointer-events: none; /* マウスイベントを透過させて動画操作を邪魔しない */
+            transform: translate(-50%, -50%); /* カーソルの中心に合わせる */
+            z-index: 9999; /* 一番手前に表示 */
+            /* リアルな光の表現（ぼかし効果） */
+            box-shadow: 0 0 8px #ff0000, 0 0 15px #ff0000, 0 0 25px #ff3333;
+            /* 動きを少し滑らかにする場合 */
+            transition: transform 0.05s ease-out; 
+            display: none; /* 初期状態は非表示（マウスが動いたら表示） */
+        }
+
+        /* スライド番号表示 */
+        .status-badge {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.6);
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            pointer-events: none;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+
+<div class="video-container">
+    <div id="status" class="status-badge">Slide: 1 / 4</div>
+    <video id="presoVideo" src="動画\資料試作品.mp4" preload="auto"></video>
+</div>
+
+<!-- 疑似レーザーポインター用の要素 -->
+<div id="laser" class="laser-pointer"></div>
+
+<script>
+const video = document.getElementById('presoVideo');
+const statusBadge = document.getElementById('status');
+const laser = document.getElementById('laser');
+
+// start: 矢印キーを押した瞬間に「スキップ（ワープ）する先」の秒数
+// end: 自動再生を停止させる秒数
+const slides = [
+    { start: 0,    end: 0 },    // 1ページ目：0秒で静止
+    { start: 1,    end: 1 },    // 2ページ目：1秒へスキップ、そのまま静止
+    { start: 2,    end: 2 },    // 3ページ目：2秒へスキップ、そのまま静止
+    { start: 3,    end: 6.5 },    // 4ページ目：3秒へスキップ、7秒まで再生して停止
+    { start: 7,    end: 7 },    // 5ページ目：7秒へスキップ、そのまま静止
+    { start: 7,    end: 8.5 },    // 6ページ目：7秒へスキップ、9秒まで再生して停止
+    { start: 9,    end: 9 },    // 7ページ目：9秒へスキップ、そのまま静止
+    { start: 10,   end: 12 },   // 8ページ目：10秒へスキップ、13秒まで再生して停止
+    { start: 13.5,   end: 13.5 },   // 9ページ目：13秒へスキップ、そのまま静止
+    { start: 14,   end: 14.5 }, // 10ページ目：14秒へスキップ、14.5秒まで再生して停止
+    { start: 17,   end: 17 },   // 11ページ目：17秒へスキップ、そのまま静止
+    { start: 18,   end: 18 },   // 12ページ目：18秒へスキップ、そのまま静止
+    { start: 19,   end: 19 },   // 13ページ目：19秒へスキップ、そのまま静止
+    { start: 19.5, end: 20 },   // 14ページ目：19.5秒へスキップ、20秒まで再生して停止
+    { start: 21,   end: 21 },   // 15ページ目：21秒へスキップ、そのまま静止
+    { start: 22,   end: 22.5 }, // 16ページ目：22秒へスキップ、22.5秒まで再生して停止
+    { start: 23,   end: 23.5 }  // 17ページ目：23秒へスキップ、23.5秒まで再生して停止
+];
+
+let currentSlideIndex = 0;
+let stopTime = 0;
+let isTransitioning = false;
+
+// 初期化：最初のスライドのstart位置（0秒）で静止
+video.addEventListener('loadedmetadata', () => goToSlide(0));
+if (video.readyState >= 1) goToSlide(0);
+
+// 超高精度な時間監視（画面の更新フレームごとに実行）
+function checkVideoTime() {
+    if (isTransitioning) {
+        if (video.currentTime >= stopTime) {
+            video.pause();
+            video.currentTime = stopTime; // ターゲット時間に厳密に固定
+            isTransitioning = false;
+        } else {
+            requestAnimationFrame(checkVideoTime);
+        }
+    }
+}
+
+// キーボード操作
+window.addEventListener('keydown', (event) => {
+    if (isTransitioning) return; // アニメーション再生中は連打防止のため操作をロック
+
+    switch (event.key) {
+        case 'ArrowRight': // → キーで次のページへ
+            if (currentSlideIndex < slides.length - 1) {
+                currentSlideIndex++;
+                playSlideTransition();
+            }
+            break;
+        case 'ArrowLeft': // ← キーで前のページへ
+            if (currentSlideIndex > 0) {
+                currentSlideIndex--;
+                goToSlide(currentSlideIndex); // 前に戻るときは瞬時にそのページの「end」位置へスキップ
+            }
+            break;
+        case 'Backspace': // Backspaceキーで一番最初に戻る
+            currentSlideIndex = 0;
+            goToSlide(0);
+            break;
+    }
+});
+
+// 次のスライドへ進むときの処理
+function playSlideTransition() {
+    const currentSlide = slides[currentSlideIndex];
+    
+    // 次のページの「start秒数」へ一瞬でスキップ（ワープ）させる
+    video.currentTime = currentSlide.start; 
+    stopTime = currentSlide.end;
+    
+    // スキップ（シーク）が完了した後の処理
+    video.onseeked = function() {
+        video.onseeked = null; // イベントをクリア
+        
+        // もし start と end が同じ（例：1~1秒、2~2秒など）なら、再生せずその場で静止
+        if (currentSlide.start === currentSlide.end) {
+            isTransitioning = false;
+        } else {
+            // 時間に差がある場合（例：3~7秒など）のみ、自動再生をスタート
+            isTransitioning = true;
+            video.play();
+            requestAnimationFrame(checkVideoTime); // 停止時間の監視を開始
+        }
+    };
+    
+    updateUI();
+}
+
+// 指定スライドへ瞬時にジャンプ（静止状態にする）
+function goToSlide(index) {
+    isTransitioning = false;
+    currentSlideIndex = index;
+    // そのスライドの「終了時点（静止しているべき絵）」にワープ
+    video.currentTime = slides[index].end;
+    stopTime = slides[index].end;
+    updateUI();
+}
+
+// UI更新（スライド番号の表示）
+function updateUI() {
+    statusBadge.textContent = `Slide: ${currentSlideIndex + 1} / ${slides.length}`;
+}
+
+// レーザーポインター制御
+window.addEventListener('mousemove', (e) => {
+    if (laser.style.display !== 'block') laser.style.display = 'block';
+    laser.style.left = e.clientX + 'px';
+    laser.style.top = e.clientY + 'px';
+});
+document.addEventListener('mouseleave', () => {
+    laser.style.display = 'none';
+});
+
+</script>
+
+</body>
+</html>
